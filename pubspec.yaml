@@ -1,0 +1,17 @@
+name: widget_inspector
+description: A powerful Flutter widget inspector tool for debugging and visual inspection. Click on any widget to inspect its properties, hierarchy, and generate AI-ready modification requests.
+version: 1.0.0
+homepage: https://github.com/elev8tion/widget_inspector
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: '>=3.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
