@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'inspector_service.dart';
 import 'inspector_widgets.dart';
 import 'models.dart';
+import 'enhanced_hit_test_processor.dart';
+import 'widget_instance_tracker.dart';
 
 /// Holds exact source location for a widget
 class WidgetSourceLocation {
@@ -204,6 +206,9 @@ class InspectorOverlay extends StatefulWidget {
 
 class _InspectorOverlayState extends State<InspectorOverlay> {
   final _inspector = InspectorService();
+  final _hitTestProcessor = EnhancedHitTestProcessor.instance;
+  final _instanceTracker = WidgetInstanceTracker.instance;
+
   bool _isActive = false;
   WidgetBounds? _selectedWidget;
   WidgetBounds? _hoveredWidget;
@@ -292,6 +297,29 @@ class _InspectorOverlayState extends State<InspectorOverlay> {
     final result = BoxHitTestResult();
     rootBox.hitTest(result, position: position);
 
+    // Convert local position to global for the hit test processor
+    final globalPosition = rootBox.localToGlobal(position);
+
+    // Use EnhancedHitTestProcessor for precise widget selection
+    final match = _hitTestProcessor.findWidgetWithCornerAwareness(
+      result,
+      globalPosition,
+    );
+
+    if (match == null) {
+      // Fallback to legacy method if no match found
+      return _findWidgetAtPositionLegacy(position, rootBox, result);
+    }
+
+    // Register widget instances for sibling tracking
+    _instanceTracker.registerFromElement(match.element);
+
+    // Extract enhanced widget bounds with all new fields
+    return _extractEnhancedWidgetBounds(match, globalPosition);
+  }
+
+  /// Legacy fallback method for hit testing
+  WidgetBounds? _findWidgetAtPositionLegacy(Offset position, RenderBox rootBox, BoxHitTestResult result) {
     RenderObject? bestTarget;
     final List<String> hierarchy = [];
     final pathList = result.path.toList();
@@ -327,6 +355,88 @@ class _InspectorOverlayState extends State<InspectorOverlay> {
     if (bestTarget == null || bestTarget is! RenderBox) return null;
 
     return _extractWidgetBounds(bestTarget, hierarchy, position);
+  }
+
+  /// Extract enhanced widget bounds using the new WidgetMatch from hit test processor
+  WidgetBounds _extractEnhancedWidgetBounds(WidgetMatch match, Offset globalPosition) {
+    final matchedWidget = match.widget;
+    final element = match.element;
+    final box = match.renderBox;
+
+    // Try to extract source location
+    String sourceFile = 'lib/main.dart';
+    int? lineNumber;
+    int? columnNumber;
+
+    final sourceLocation = _extractWidgetSourceLocation(matchedWidget, element);
+    if (sourceLocation != null) {
+      sourceFile = sourceLocation.file;
+      lineNumber = sourceLocation.line;
+      columnNumber = sourceLocation.column;
+      debugPrint('🎯 EXACT LOCATION: ${sourceLocation.shortFile}:$lineNumber');
+    }
+
+    // Get UI location (uses InspectorOverlay's custom detector if provided)
+    String uiLocation = widget.locationDetector?.call(match.parentChain, match.globalOffset, context)
+        ?? _defaultLocationDetector(match.parentChain, match.globalOffset);
+
+    // Extract properties
+    final properties = <String, dynamic>{};
+    if (box is RenderParagraph) {
+      properties['text'] = box.text.toPlainText();
+    }
+    if (box is RenderDecoratedBox) {
+      final decoration = box.decoration;
+      if (decoration is BoxDecoration && decoration.color != null) {
+        properties['color'] = decoration.color.toString();
+      }
+    }
+
+    // Get sibling index for differentiating duplicate widgets
+    final siblingIndex = _instanceTracker.findSiblingIndex(match.widgetType, element);
+    final uniqueInstanceId = _instanceTracker.generateUniqueId(matchedWidget, element);
+
+    // Extract layout properties
+    final layoutProps = _hitTestProcessor.extractLayoutProperties(box);
+    final layoutInfo = WidgetLayoutInfo(
+      width: layoutProps.size.width,
+      height: layoutProps.size.height,
+      flexFactor: layoutProps.flexFactor,
+      flexFit: layoutProps.flexFit?.toString(),
+      hasOverflow: layoutProps.hasOverflow,
+      constraints: layoutProps.constraints?.toString(),
+      padding: layoutProps.padding?.toString(),
+      alignment: layoutProps.alignment?.toString(),
+    );
+
+    // Build diagnostic properties
+    final diagnosticProperties = <String, dynamic>{
+      'specificityScore': match.specificityScore,
+      'cornerZone': match.cornerZone.name,
+      'isCornerSelected': match.isCornerSelected,
+    };
+
+    final info = WidgetInfo(
+      widgetType: match.widgetType,
+      location: uiLocation,
+      sourceFile: sourceFile,
+      lineNumber: lineNumber,
+      columnNumber: columnNumber,
+      size: match.size,
+      position: match.globalOffset,
+      properties: properties,
+      parentChain: match.parentChain,
+      uniqueInstanceId: uniqueInstanceId,
+      siblingIndex: siblingIndex,
+      matchConfidence: match.specificityScore.clamp(0.0, 1.0),
+      layoutInfo: layoutInfo,
+      diagnosticProperties: diagnosticProperties,
+    );
+
+    return WidgetBounds(
+      rect: match.bounds,
+      info: info,
+    );
   }
 
   String _getCleanWidgetName(RenderObject renderObject) {
