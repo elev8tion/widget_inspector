@@ -11,3 +11,4 @@ export 'src/models.dart';
 export 'src/source_code_correlator.dart';
 export 'src/enhanced_hit_test_processor.dart';
 export 'src/widget_instance_tracker.dart';
+export 'src/source_cache_service.dart';
